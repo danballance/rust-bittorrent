@@ -56,15 +56,7 @@ impl Context {
             }
             Value::Object(obj) => {
                 // Check if there is already a key whose value is Value::Null
-                // @TODO dupe - refactor
-                let null_key = obj.iter().find_map(|(key, map_value)| {
-                    if matches!(map_value, Value::Null) {
-                        Some(key.clone())
-                    } else {
-                        None
-                    }
-                });
-
+                let null_key = locate_null_key(obj);
                 if let Some(key) = null_key {
                     // If there is, insert the new value into the map at that key
                     obj.insert(key, value);
@@ -105,58 +97,8 @@ impl Context {
      * push a new array to the array.
      */
     pub(crate) fn create_array(&mut self) -> Result<(), String> {
-        let mut new_child_index = None;
-        let mut new_child_key: Option<String> = None;
-        {
-            let current = self.current_value().ok_or("invalid value location")?;
-            match current {
-                // Already in an array, add a new array to the current array
-                Value::Array(array) => {
-                    let index = array.len();
-                    array.push(Value::Array(vec![]));
-                    new_child_index = Some(index);
-                }
-                Value::Object(obj) => {
-                    // Check if there is already a key whose value is Value::Null
-                    // @TODO dupe - refactor
-                    let null_key = obj.iter().find_map(|(key, map_value)| {
-                        if matches!(map_value, Value::Null) {
-                            Some(key.clone())
-                        } else {
-                            None
-                        }
-                    });
-
-                    if let Some(key) = null_key {
-                        // If there is, insert the new value into the map at that key
-                        new_child_key = Some(key.clone());
-                        obj.insert(key, Value::Array(vec![]));
-                    } else {
-                        return Err(format!(
-                            "Unable to fine NULL value to place new object: {:?}",
-                            obj
-                        ));
-                    }
-                }
-                // We are at a Null location.
-                // Replace this location with an array.
-                // The path does not change because this is not a child.
-                Value::Null => *current = Value::Array(vec![]),
-                other => {
-                    return Err(format!("cannot create array at current value: {:?}", other));
-                }
-            }
-        }
-
-        // Now the mutable borrow from current_value_mut() has ended,
-        // so we can safely mutate self.value_path.
-        if let Some(index) = new_child_index {
-            self.value_path.push(PathItem::Index(index));
-        }
-        if let Some(key) = new_child_key {
-            self.value_path.push(PathItem::Key(key));
-        }
-        Ok(())
+        let new_value = Value::Array(vec![]);
+        self.create_in_current_value(new_value)
     }
 
     /*
@@ -166,27 +108,24 @@ impl Context {
      * Objects can't be keys in this schema - can only be a value.
      */
     pub(crate) fn create_object(&mut self) -> Result<(), String> {
+        let new_value = Value::Object(Map::new());
+        self.create_in_current_value(new_value)
+    }
+
+    fn create_in_current_value(&mut self, value: Value) -> Result<(), String> {
         let mut new_child_index: Option<usize> = None;
         let mut new_child_key: Option<String> = None;
         {
-            let current = self.current_value().ok_or("invalid value location")?;
+            let current = self.current_value();
             match current {
-                // Already in an object, look for a NULL value to insert a new object into
-                Value::Object(obj) => {
+                // Already in an object, look for a NULL value to insert a new value into it
+                Some(Value::Object(obj)) => {
                     // Check if there is already a key whose value is Value::Null
-                    // @TODO dupe - refactor
-                    let null_key = obj.iter().find_map(|(key, map_value)| {
-                        if matches!(map_value, Value::Null) {
-                            Some(key.clone())
-                        } else {
-                            None
-                        }
-                    });
-
+                    let null_key = locate_null_key(obj);
                     if let Some(key) = null_key {
                         // If there is, insert the new value into the map at that key
                         new_child_key = Some(key.clone());
-                        obj.insert(key, Value::Object(Map::new()));
+                        obj.insert(key, value);
                     } else {
                         return Err(format!(
                             "Unable to fine NULL value to place new object: {:?}",
@@ -194,15 +133,16 @@ impl Context {
                         ));
                     }
                 }
-                // Already in an array, add a new object to the current array
-                Value::Array(array) => {
+                // Already in an array, add a new value to the current array
+                Some(Value::Array(array)) => {
                     let index = array.len();
                     new_child_index = Some(index);
-                    array.push(Value::Object(Map::new()));
+                    array.push(value);
                 }
-                // We are at a Null location.
-                // The path does not change because this is not a child.
-                Value::Null => *current = Value::Object(Map::new()),
+                // We are at a Null location - path does not change because not a child
+                Some(slot @ Value::Null) => {
+                    *slot = value;
+                }
                 other => {
                     return Err(format!(
                         "cannot create object at current value: {:?}",
@@ -222,6 +162,7 @@ impl Context {
         }
         Ok(())
     }
+
     pub(crate) fn end_nested_value(&mut self) {
         self.value_path.pop();
     }
@@ -231,6 +172,16 @@ impl Context {
         self.meta_chars.clear();
         self.value_length = 0;
     }
+}
+
+fn locate_null_key(obj: &Map<String, Value>) -> Option<String> {
+    obj.iter().find_map(|(key, value)| {
+        if matches!(value, Value::Null) {
+            Some(key.clone())
+        } else {
+            None
+        }
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
