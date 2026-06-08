@@ -7,18 +7,8 @@ impl CharacterProcessor {
         Self {}
     }
     pub fn next_character(&self, character: char, context: Context) -> Result<Context, String> {
-        let kind = if context.state == Some(BencodeState::End)
-            || (context.kind == Some(BencodeKind::List)
-                && context.state == Some(BencodeState::Start))
-            || (context.kind == Some(BencodeKind::Dictionary)
-                && context.state == Some(BencodeState::Start))
-        {
-            None
-        } else {
-            context.kind.as_ref()
-        };
-
-        match kind {
+        let active_kind = get_active_kind(&context);
+        match active_kind {
             None => self._no_kind(character, context),
             Some(BencodeKind::Integer) => self._integer_kind(character, context),
             Some(BencodeKind::List) => self._no_kind(character, context),
@@ -166,5 +156,21 @@ impl CharacterProcessor {
                 other
             )),
         }
+    }
+}
+
+fn get_active_kind(context: &Context) -> Option<BencodeKind> {
+    let kind_has_ended = context.state == Some(BencodeState::End);
+    let just_opened_container = matches!(
+        (context.kind, context.state),
+        (
+            Some(BencodeKind::List | BencodeKind::Dictionary),
+            Some(BencodeState::Start)
+        )
+    );
+    if kind_has_ended || just_opened_container {
+        None
+    } else {
+        context.kind
     }
 }
