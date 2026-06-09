@@ -172,6 +172,14 @@ impl Context {
         self.meta_chars.clear();
         self.value_length = 0;
     }
+
+    pub(crate) fn pop_next_container(&self) -> Result<(Vec<BencodeKind>, BencodeKind), String> {
+        let mut open_containers = self.open_containers.clone();
+        let open_container = open_containers
+            .pop()
+            .ok_or_else(|| "Unexpected 'e': no open container to close".to_string())?;
+        Ok((open_containers, open_container))
+    }
 }
 
 fn locate_null_key(obj: &Map<String, Value>) -> Option<String> {

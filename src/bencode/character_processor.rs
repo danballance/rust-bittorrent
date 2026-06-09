@@ -1,3 +1,4 @@
+use crate::bencode::handlers::{DictionaryHandler, IntegerHandler, ListHandler, StringHandler};
 use crate::bencode::types::{BencodeKind, BencodeState, Context};
 
 pub struct CharacterProcessor {}
@@ -19,95 +20,27 @@ impl CharacterProcessor {
 
     fn _no_kind(&self, character: char, mut ctxt: Context) -> Result<Context, String> {
         match character {
-            'd' => {
-                ctxt.create_object()?;
-                ctxt.clear_type();
-                (ctxt.character, ctxt.kind, ctxt.state) = (
-                    Some('d'),
-                    Some(BencodeKind::Dictionary),
-                    Some(BencodeState::Start),
-                );
-                ctxt.open_containers.push(BencodeKind::Dictionary);
-                Ok(ctxt)
-            }
+            'd' => DictionaryHandler::Start(ctxt),
             'e' => {
-                // when there's no Kind set, 'e' is closing a container
-                let mut open_containers = ctxt.open_containers.clone();
-                let open_container = open_containers
-                    .pop()
-                    .ok_or_else(|| "Unexpected 'e': no open container to close".to_string())?;
+                // when no Kind is set, 'e' is closing a container - List or Dictionary
+                let (open_containers, open_container) = ctxt.pop_next_container()?;
                 match open_container {
-                    BencodeKind::List => (),
-                    BencodeKind::Dictionary => (),
+                    BencodeKind::List => ListHandler::End(ctxt, open_containers),
+                    BencodeKind::Dictionary => DictionaryHandler::End(ctxt, open_containers),
                     _ => return Err("open_container was not a List or a Dictionary".to_string()),
                 }
-                ctxt.end_nested_value();
-                ctxt.clear_type();
-                (ctxt.character, ctxt.kind, ctxt.state, ctxt.open_containers) = (
-                    Some('e'),
-                    Some(open_container),
-                    Some(BencodeState::End),
-                    open_containers,
-                );
-                Ok(ctxt)
             }
-            'i' => {
-                (ctxt.character, ctxt.kind, ctxt.state) = (
-                    Some('i'),
-                    Some(BencodeKind::Integer),
-                    Some(BencodeState::Start),
-                );
-                Ok(ctxt)
-            }
-            'l' => {
-                ctxt.create_array()?;
-                ctxt.clear_type();
-                (ctxt.character, ctxt.kind, ctxt.state) = (
-                    Some('l'),
-                    Some(BencodeKind::List),
-                    Some(BencodeState::Start),
-                );
-                ctxt.open_containers.push(BencodeKind::List);
-                Ok(ctxt)
-            }
-            c if c.is_ascii_digit() || c == '-' => {
-                ctxt.meta_chars.push(c);
-                (ctxt.character, ctxt.kind, ctxt.state) =
-                    (Some(c), Some(BencodeKind::String), Some(BencodeState::Meta));
-                Ok(ctxt)
-            }
+            'i' => IntegerHandler::Start(ctxt),
+            'l' => ListHandler::Start(ctxt),
+            c if c.is_ascii_digit() || c == '-' => StringHandler::Meta(ctxt, c),
             _ => Err("Unhandled encoded value".into()),
         }
     }
 
     fn _integer_kind(&self, character: char, mut ctxt: Context) -> Result<Context, String> {
         match character {
-            'e' => {
-                let integer = ctxt
-                    .data_chars
-                    .parse::<isize>()
-                    .map_err(|_| "invalid integer".to_string())?;
-
-                let serde_integer = serde_json::Value::Number(integer.into());
-
-                ctxt.update_value(serde_integer)?;
-                ctxt.clear_type();
-                (ctxt.character, ctxt.kind, ctxt.state) = (
-                    Some('e'),
-                    Some(BencodeKind::Integer),
-                    Some(BencodeState::End),
-                );
-                Ok(ctxt)
-            }
-            c if c.is_ascii_digit() || c == '-' => {
-                ctxt.data_chars.push(character);
-                (ctxt.character, ctxt.kind, ctxt.state) = (
-                    Some(c),
-                    Some(BencodeKind::Integer),
-                    Some(BencodeState::Data),
-                );
-                Ok(ctxt)
-            }
+            'e' => IntegerHandler::End(ctxt),
+            c if c.is_ascii_digit() || c == '-' => IntegerHandler::Data(ctxt, c),
             _ => Err("".into()),
         }
     }
@@ -145,12 +78,7 @@ impl CharacterProcessor {
                 (ctxt.character, ctxt.kind) = (Some(':'), Some(BencodeKind::String));
                 Ok(ctxt)
             }
-            c if c.is_ascii_digit() => {
-                ctxt.meta_chars.push(c);
-                (ctxt.character, ctxt.kind, ctxt.state) =
-                    (Some(c), Some(BencodeKind::String), Some(BencodeState::Meta));
-                Ok(ctxt)
-            }
+            c if c.is_ascii_digit() => StringHandler::Meta(ctxt, c),
             other => Err(format!(
                 "Unable to match character '{:?}' in _string_kind CharacterProcessor.",
                 other
