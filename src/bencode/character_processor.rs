@@ -20,65 +20,38 @@ impl CharacterProcessor {
 
     fn _no_kind(&self, character: char, mut ctxt: Context) -> Result<Context, String> {
         match character {
-            'd' => DictionaryHandler::Start(ctxt),
+            'd' => DictionaryHandler::start(ctxt),
             'e' => {
                 // when no Kind is set, 'e' is closing a container - List or Dictionary
                 let (open_containers, open_container) = ctxt.pop_next_container()?;
                 match open_container {
-                    BencodeKind::List => ListHandler::End(ctxt, open_containers),
-                    BencodeKind::Dictionary => DictionaryHandler::End(ctxt, open_containers),
+                    BencodeKind::List => ListHandler::end(ctxt, open_containers),
+                    BencodeKind::Dictionary => DictionaryHandler::end(ctxt, open_containers),
                     _ => return Err("open_container was not a List or a Dictionary".to_string()),
                 }
             }
-            'i' => IntegerHandler::Start(ctxt),
-            'l' => ListHandler::Start(ctxt),
-            c if c.is_ascii_digit() || c == '-' => StringHandler::Meta(ctxt, c),
+            'i' => IntegerHandler::start(ctxt),
+            'l' => ListHandler::start(ctxt),
+            c if c.is_ascii_digit() || c == '-' => StringHandler::meta(ctxt, c),
             _ => Err("Unhandled encoded value".into()),
         }
     }
 
     fn _integer_kind(&self, character: char, mut ctxt: Context) -> Result<Context, String> {
         match character {
-            'e' => IntegerHandler::End(ctxt),
-            c if c.is_ascii_digit() || c == '-' => IntegerHandler::Data(ctxt, c),
-            _ => Err("".into()),
+            'e' => IntegerHandler::end(ctxt),
+            c if c.is_ascii_digit() || c == '-' => IntegerHandler::data(ctxt, c),
+            _ => Err("Unable to match a character for _integer_kind".into()),
         }
     }
 
     fn _string_kind(&self, character: char, mut ctxt: Context) -> Result<Context, String> {
         match character {
             c if ctxt.character == Some(':') || ctxt.state == Some(BencodeState::Data) => {
-                ctxt.data_chars.push(c);
-                if ctxt.data_chars.len() == ctxt.value_length {
-                    let serde_string = serde_json::Value::String(ctxt.data_chars.clone());
-                    ctxt.update_value(serde_string)?;
-                    ctxt.clear_type();
-                    ctxt.state = Some(BencodeState::End);
-                } else {
-                    ctxt.state = Some(BencodeState::Data);
-                }
-                (ctxt.character, ctxt.kind) = (Some(c), Some(BencodeKind::String));
-                Ok(ctxt)
+                StringHandler::data(ctxt, c)
             }
-            ':' if ctxt.state == Some(BencodeState::Meta) => {
-                // resolve string length from meta chars
-                ctxt.value_length = ctxt
-                    .meta_chars
-                    .parse::<usize>()
-                    .map_err(|_| format!("Invalid string length: {}", ctxt.meta_chars))?;
-                // reached end of string (zero length string)
-                if ctxt.value_length == 0 {
-                    let serde_string = serde_json::Value::String(ctxt.data_chars.clone());
-                    ctxt.update_value(serde_string)?;
-                    ctxt.clear_type();
-                    ctxt.state = Some(BencodeState::End);
-                } else {
-                    ctxt.state = Some(BencodeState::Meta);
-                }
-                (ctxt.character, ctxt.kind) = (Some(':'), Some(BencodeKind::String));
-                Ok(ctxt)
-            }
-            c if c.is_ascii_digit() => StringHandler::Meta(ctxt, c),
+            ':' if ctxt.state == Some(BencodeState::Meta) => StringHandler::meta(ctxt, ':'),
+            c if c.is_ascii_digit() => StringHandler::meta(ctxt, c),
             other => Err(format!(
                 "Unable to match character '{:?}' in _string_kind CharacterProcessor.",
                 other
